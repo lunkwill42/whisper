@@ -37,12 +37,16 @@ try:
   import ctypes
   import ctypes.util
   CAN_FALLOCATE = True
+  CAN_FADVISE = True
 except ImportError:
   CAN_FALLOCATE = False
+  CAN_FADVISE = False
 
 fallocate = None
+fadvise = None
+POSIX_FADV_RANDOM = 1  # from fcntl.h
 
-if CAN_FALLOCATE: 
+if CAN_FALLOCATE or CAN_FADVISE:
   libc_name = ctypes.util.find_library('c')
   libc = ctypes.CDLL(libc_name)
   c_off64_t = ctypes.c_int64
@@ -60,12 +64,32 @@ if CAN_FALLOCATE:
     except AttributeError, e:
       CAN_FALLOCATE = False
 
+  try:
+    _fadvise = libc.posix_fadvise64
+    _fallocate.restype = ctypes.c_int
+    _fallocate.argtypes = [ctypes.c_int, c_off64_t, c_off64_t, ctypes.c_int]
+  except AttributeError, e:
+    try:
+      _fallocate = libc.posix_fadvise
+      _fallocate.restype = ctypes.c_int
+      _fallocate.argtypes = [ctypes.c_int, c_off_t, c_off_t, ctypes.c_int]
+    except AttributeError, e:
+      CAN_FADVISE = False
+
   if CAN_FALLOCATE:
     def _py_fallocate(fd, offset, len_):
       res = _fallocate(fd.fileno(), offset, len_)
       if res != 0:
         raise IOError(res, 'fallocate')
     fallocate = _py_fallocate
+
+  if CAN_FADVISE:
+    def _py_fadvise(fd, offset, len_, advice):
+      res = _fadvise(fd.fileno(), offset, len_, advice)
+      if res != 0:
+        raise IOError(res, 'fadvise')
+    fadvise = _py_fadvise
+
   del libc
   del libc_name
 
@@ -532,6 +556,8 @@ timestamp is either an int or float
   fh = None
   try:
     fh = open(path,'r+b')
+    if CAN_FADVISE:
+        fadvise(fh, 0, 0, POSIX_FADV_RANDOM)
     return file_update(fh, value, timestamp)
   finally:
     if fh:
@@ -601,6 +627,8 @@ points is a list of (timestamp,value) points
   fh = None
   try:
     fh = open(path,'r+b')
+    if CAN_FADVISE:
+        fadvise(fh, 0, 0, POSIX_FADV_RANDOM)
     return file_update_many(fh, points)
   finally:
     if fh:
